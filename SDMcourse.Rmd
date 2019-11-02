@@ -1,0 +1,1276 @@
+---
+title: "SDMcourse"
+author: "Rafael Rabelo"
+date: "November 2, 2019"
+output: html_document
+---
+
+
+# Instruções para instalação do R e do Maxent
+
+Instale o programa R (https://cran.r-project.org/). Se estiver com alguma versão anterior a 3.3.1, instale uma versão mais recente. A instalação do RStudio é opcional, mas lembre que o RStudio apresenta muitas facilidades em relação ao R bruto. 
+
+Instale os seguintes pacotes junto com as dependências:
+```{r, echo=FALSE}
+install.packages ("raster", dependencies=TRUE)
+install.packages ("sp", dependencies=TRUE)
+install.packages ("rgeos", dependencies=TRUE)
+install.packages ("rgdal", dependencies=TRUE)
+install.packages ("maptools", dependencies=TRUE)
+install.packages ("fields", dependencies=TRUE)
+install.packages ("shapefiles", dependencies=TRUE)
+install.packages ("dismo", dependencies=TRUE)
+install.packages ("rJava", dependencies=TRUE)
+install.packages ("ENMeval", dependencies=TRUE)
+install.packages ("rgbif", dependencies=TRUE)
+install.packages ("knitr", dependencies=TRUE)
+install.packages ("maps", dependencies=TRUE)
+install.packages ("usdm", dependencies=TRUE)
+install.packages ("data.table", dependencies=TRUE)
+```
+
+# Para rodar *Maxent* no R
+
+1. Verifique se o Java está instalado no seu computador. Se não estiver, instale. Certifique-se de que ambas versões do R e Java são de 32 ou 64 bits, de acordo com o seu computador. Se elas não tiverem conversando, vai dar erro.
+
+2. Acesse o site https://github.com/mrmaxent/Maxent/tree/master/ArchivedReleases e faça o download da versão 3.3.3k.
+
+3. Copie o arquivo  “maxent.jar” que está dentro da pasta Maxent que você instalou no seu computador e cole dentro da pasta java do pacote dismo. Para saber onde está instalado o pacote dismo digite no console do R “system.file("java", package="dismo")”. Ele exibirá o local da pasta.
+
+4. Carregue os pacotes e confira se está tudo ok.
+
+
+
+# 1. Manipulando e visualizando dados espaciais no R
+
+Carregando os pacotes necessários
+```{r, message=FALSE, warning=FALSE}
+library(raster)
+library(sp)
+library(rgeos)
+library(rgdal)
+library(fields)
+library(shapefiles)
+library(maptools) 
+library(maps)
+library(data.table)
+library(dismo)
+library(rgbif)
+```
+
+Definindo a área de trabalho, ou seja, o local do seu computador de onde o R vai importar os arquivos. Você pode fazer isso usando o comando abaixo ou abrindo o R, salvando o workspace na pasta que você deseja, fechando e abrindo o projeto recém criado.
+```{r}
+setwd("~/Documents/SDM_workshop/exercicios")
+```
+
+## 1.1 Dados vetoriais
+
+Nesta prática, vamos aprender a manipular dados vetorias (pontos e polígonos). O pacote sp apresenta o grande número de funções para manipular dados vetoriais no R (Bivand et al. 2013). 
+Vamos importar a tabela de dados com registros de ocorrência do macaco-aranha-da-cara-preta (*Ateles chamek*), um primata endêmico da Amazônia.
+```{r}
+Acham<- fread('https://raw.githubusercontent.com/rmrabelo/SDMcourse/master/A_chamek_occurrences.csv')
+head(Acham)
+```
+
+No pacote sp temos a opção de criar dois tipos de objetos espaciais baseados em pontos: SpatialPoint (SP) e um SpatialPointDataFrame object (SPDF).
+```{r}
+## Criando um objeto do tipo SpatialPoint (SP)...
+Acham.sp<- SpatialPoints(Acham[,c(2,3)], proj4string=CRS("+proj=longlat +datum=WGS84"))
+## E um SpatialPointsDataFrame object (SPDF)
+Acham.spdf<- SpatialPointsDataFrame(Acham[,c(2,3)], Acham, proj4string=CRS("+proj=longlat +datum=WGS84"))
+```
+
+A diferença entre os dois é que o SP traz apenas as coordenadas espaciais dos pontos, enquanto que o segundo traz também a tabela de atributos, além das próprias coordenadas. Veja a diferença entre os dois objetos.
+```{r}
+Acham.sp
+Acham.spdf
+```
+
+Vamos acessar a tabela de atributos do objetos SPDF. Encontre as informações que o objeto carrega usando a função str(). Para acessar a tabela diretamente, use o comando abaixo
+```{r}
+head(Acham.spdf@data)
+```
+
+Plote os pontos de ocorrência de *A. chamek* sobre um mapa de países representado por objeto-polígono já disponibilizado pelo pacote **maps**.
+```{r}
+plot(Acham.spdf, pch=21, bg='gray')
+map('world', add=T)
+```
+
+Selecione e plote separadamente apenas os registros de museus e avistamentos.
+```{r}
+## Museus
+museum<- which(Acham.spdf@data$TYPE_OF_RECORD == "preserved specimen")
+Acham.museum<- Acham.spdf[museum,]
+## Avistamentos
+sight<- which(Acham.spdf@data$TYPE_OF_RECORD == "sight")
+Acham.sight<- Acham.spdf[sight,]
+## Plot
+plot(Acham.sp, col="white")
+plot(Acham.museum, pch=21, bg="red", add=T)
+plot(Acham.sight, pch=21, bg="blue", add=T)
+map('world',add=T)
+```
+
+Note que existem pontos localizados em áreas onde sabemos que a espécie não ocorre, por exemplo, no Oceano Atlântico. Vamos fazer uma checagem e limpeza desses dados.
+Primeiro, vamos remover todos os registros duplicados, ou seja, registros com coordenadas geográficas exatamente iguais.
+```{r}
+Acham.spdf
+Acham.spdf<- remove.duplicates(Acham.spdf)
+Acham.spdf
+```
+
+Notem que os pontos já diminuíram de 132 para 100 registros (ver informação **features** do objeto). Agora vamos conferir se tem dados com  longitude ou latitude igual a zero. Esses registros geralmente são provenientes de museu e não apresentam coordenadas confiáveis.
+```{r}
+subset(Acham.spdf@data, LONGITUDE==0)
+subset(Acham.spdf@data, LATITUDE==0)
+```
+
+Veja que temos mais alguns pontos para serem removidos. Nota: lembrar que os nomes das colunas na tabela de atributis podem ser diferentes (Latitude, latitude, lat, etc).
+Agora vamos remover esses pontos. 
+```{r}
+Acham.spdf <- Acham.spdf[-which(Acham.spdf@data[,2]==0),]
+Acham.spdf <- Acham.spdf[-which(Acham.spdf@data[,3]==0),]
+## Plot
+plot(Acham.spdf, pch=21, bg="gray")
+map('world',add=T)
+```
+
+Já ficou bem melhor, mas notem que ainda existe um ponto localizado próximo do Rio de Janeiro. Esse registro provavelmente deve ser de museu, pois sabemos que essa espécie Amazônica não ocorre nessa região.
+Vamos importar o shapefile da Amazônia (obtido de Eva and Huber 2005) para sobrepor os pontos de ocorrência da espécie. Depois vamos usar esse shape para selecionar apenas os registros que ocorrem dentro dos limites da Amazônia.
+```{r}
+amaz<- shapefile("amazonia_polygons")
+# veja a classe do objeto
+amaz
+plot(amaz)
+```
+
+Perceba que objeto amaz apresenta 5 polígonos. A proposta de limite da Amazônia (Eva and Huber 2005) compreende á área dos 5 polígonos. Portanto, transforme todos os polígonos em um só para criar Amazônia sensu latissimo (segundo Eva and Huber 2005) e plote também a Amazônia sensu stricto.
+```{r}
+## Veja os nomes dos poligonos na tabela de atributos
+unique(amaz@data$name)
+
+# veja qual o id da linha que corresponde ao poligono da Amazonia sensu stricto
+ass<- which(amaz@data$name == "Amazonia - sensu stricto")
+
+## Unindo os polígonos
+amaz.sl<-gUnaryUnion(amaz)
+
+#plote Amazônia sensu stricto sobre a sensu latissimo
+plot(amaz.sl)
+plot(amaz[ass,], border="red", add=T)
+```
+
+Agora plote agora os pontos de ocorrência de *A. chamek* sobre o mapa da Amazônia sensu latissimo.
+```{r}
+plot(Acham.spdf, pch=21, bg="gray")
+plot(amaz.sl, border="green", add=T)
+map('world',add=T)
+```
+
+Veja o registro localizado no RJ, fora da Amazônia. Vamos removê-lo. Para isso, insira o objeto polígono dentro dos colchetes, indicando que queremos selecionar apenas os pontos que fazem interseção com o polígono. 
+Antes disso, precisamos corrigir uma divergência no sistema de coordenadas, pois os polígono e os pontos apresentam coordenadas ligeiramente diferentes. Embora os dois estejam georreferenciados como latlong WGS84, existe uma pequena diferença na grafia das projeções. Veja a projeção dos dois objetos e salve os dois com a mesma projeção.
+```{r}
+## Conferindo as projeções
+projection(Acham.spdf)
+projection(amaz.sl)
+
+## Salve os dois objetos com a mesma projeção
+projection(amaz.sl)<- projection(Acham.spdf)
+
+## Conferindo novamente
+projection(Acham.spdf)
+projection(amaz.sl)
+```
+
+Agora sim, vamos executar o comando para excluir o ponto do RJ.
+```{r}
+Acham.spdf<- Acham.spdf[amaz.sl,]
+plot(amaz.sl,border='green')
+plot(Acham.spdf,add=T, bg="gray", pch=21)
+map('world',add=T)
+```
+
+Pronto, agora já temos os dados checados. Vamos exportar esses dados em diferentes formatos de arquivos (SHP e KML), caso você queira visualizá-los em outro programas.
+```{r}
+# SHP
+writePointsShape(Acham.spdf, "A_chamek_occurrences_clean")
+writePolyShape(as(amaz.sl, "SpatialPolygonsDataFrame"), "amazonia_sensulatissimo")
+# abrir arquivos shp no QGIS
+
+# KML
+writeOGR(Acham.spdf, "A_chamek_occurrences_clean.kml", layer="Acham", driver="KML")
+writeOGR(as(amaz.sl, "SpatialPolygonsDataFrame"), 
+         "amazonia_sensulatissimo.kml", layer="amazonia.sl", driver="KML") 
+# abrir arquivos KML no google Earth
+```
+
+Quando for trabalhar no seu projeto, você pode obter dados de ocorrência de uma espécie que constam na base da dados GBIF direitamente pelo R. Para isso, você precisa ter um bom acesso à internet. Veja o exemplo das linhas de comando abaixo, onde baixamos os dados da espécie *Alouatta caraya*. Você pode usar elas para baixar os dados da sua espécie de interesse. O *download* das ocorrências pode demorar alguns minutos, dependendo do número de registros da espécie na base.
+```{r}
+## A função "gbif()" baixa os dados de ocorrências de uma espécie direto pelo R. O argumento "geo" é lógico e baixa apenas os registros que estão georreferenciados. O argumento "sp" também é lógico e já salva os dados como um objeto do tipo "SpatialPointsDataFrame". O argumento "removeZeros" serve para remover coordenadas que tenham latitude ou longitude iguais a zero. 
+Acaray<- gbif("Alouatta","caraya", geo=T, sp=T, removeZeros=T)
+Acaray
+
+## Definindo uma projeção
+projection(Acaray)<- "+proj=longlat +datum=WGS84"
+
+## Plot
+plot(Acaray, pch=21, bg="orange")
+map('world',add=T)
+```
+
+Como pode ver, existem alguns pontos que estão localizado fora da área de distribuição da espécie. Agora você pode usar os comando aprendido acima para terminar de "limpar" os dados.
+
+
+Além dessas funções, o pacote dismo também oferece algumas funções úteis para criar dados vetoriais que podem ser usados no processo de modelagem de distribuição de espécies, entre outras utilidades.
+Vamos criar um polígono que envolve todos os pontos de ocorrência da espécie. Esse polígono é chamado de mínimo polígono convexo (*convex hull*), pois é um polígono que liga todos os pontos das extremidades, sem apresentar qualquer ângulo maior que 180 graus. 
+```{r}
+Acham.hull <- convHull(Acham.spdf)
+plot(amaz.sl, border="green", main='Convex Hull')
+plot(Acham.hull, col="gray80", add=T)
+points(Acham.spdf, pch=21, bg="gray30")
+map('world', col="gray50", add=T)
+```
+
+No contexto da modelagem de distribuição de espécies, esse polígono pode ser usado para representar a extensão espacial na qual são consideradas as condições ambientais que estão disponíveis para a espécie. Portando, para alguns métodos de MDE, cria-se um conjunto de "pseudo-ausências" ou *background records*, que vão ajudar a ajustar o modelo. 
+Outra forma que também é utilizada, é considerar um raio com uma certa distância de cada ponto de ocorrência, criando um *buffer* que envolve todos os pontos.
+```{r}
+Acham.buff<- circles(Acham.spdf, lonlat=TRUE)
+plot(amaz.sl, border="green", main='Buffer')
+plot(Acham.buff, col="gray80", add=T)
+points(Acham.spdf, pch=19, cex=0.5, bg="gray30")
+map('world', col="gray50", add=T)
+```
+
+A distância do raio a partir dos pontos vai ser semrpe definida de acordo com as características biológicas/ecológicas da espécie em questão. Você pode ajustar a distância no argumento **d** dentro da função. A unidade de medida padrão do valor informado padrão é em metros.
+```{r}
+Acham.buff2 <- circles(Acham.spdf, d=300000, lonlat = TRUE)
+plot(amaz.sl, border="green", main='Buffer')
+plot(Acham.buff2, col="gray80", add=T)
+points(Acham.spdf, pch=19, cex=0.5, bg="gray30")
+map('world', col="gray50", add=T)
+```
+
+## 1.1 Dados matriciais (*raster*)
+
+Carregando os pacotes necessários
+```{r, message=FALSE, warning=FALSE}
+library(raster)
+library(sp)
+library(rgeos)
+library(rgdal)
+library(fields)
+library(shapefiles)
+library(maptools)
+library(maps)
+```
+
+Para esse exercício usaremos basicamente as funções dos pacotes *raster*. Vamos utilizar as camadas espaciais (*layers*) de variáveis climáticas do WordClim (http://www.worldclim.org). Para tornar o processo mais rápido para o exercício, vamos trabalhar com a menor resolução espacial disponibilizada pelo WorldClim (10 arc-minutos, o que equivale a pixels de aproximadamente 17 x 17 km). 
+Para baixar os dados direto do Worldclim podemos utilizar o comando abaixo. Isso pode demorar alguns minutos, conforme a velocidade de sua conexão com a internet. O objeto criado abaixo constitui um *stack*, ou seja, um pacote com as 19 variáveis bioclimáticas do Worldclim, todas na mesma dimensão, resolução, extensão e sistema de referência de coordenadas.
+
+```{r}
+envClim<- getData("worldclim", var = "bio", res = 10)
+envClim
+```
+
+Se você não tiver acesso à internet, não poderá fazer o download direto pelo comando acima. Nesse caso, as camadas podem ser baixadas previamente no site do Worldclim para serem carregadas no R posteriormente. Mais adiante na apostila vamos aprender como carregar dados raster já existentes em seu computador.
+
+Vamos plotar uma a camada de temperatura média anual. Essa variável é a primeira camada no *stack*.
+```{r}
+plot(envClim[[1]], main="Temperatura Média Anual")
+```
+
+Veja como varia a área de cada célula em função da latitude nessa projeção:
+```{r}
+plot(area(envClim[[1]], na.rm=T),main="área de cada célula")
+```
+
+A projeção latlong é uma projeção geográfica, a qual preserva o formato dos continentes mas altera sua área -- a área dos *pixels* aumenta a medida que se distanciam da linha do Equador. Vamos reprojetar a camada para outro sistema de coordenadas, o qual preserva a área dos continentes, mas altera suas formas; a projeção de Mollweid.
+
+```{r}
+bio1Moll<- envClim[[1]]
+bio1Moll<- projectRaster(bio1Moll, crs="+proj=moll +ellps=WGS84")
+par(mfrow=c(2,1),mar=c(2,2,2,2))
+plot(envClim[[1]], main="bio1 - Latlong WGS84")
+plot(bio1Moll, main="bio1 - Mollweid Equal Area")
+```
+
+Veja que as variáveis do Worldclim estão em uma extensão global. Vamos cortar o *raster* para uma extensão menor, usando a extensão de um *shapefile* da região Neotropical disponível em https://sites.google.com/site/biochartis/.
+Baixe previamente o *shapefile* do enedereço e coloque os arquivos no mesmo diretório onde seu projeto do R está salvo.
+
+```{r}
+neot<- shapefile("Lowenberg_Neto_2014")
+par(mfrow=c(1,1),mar=c(2,2,2,2))
+plot(neot, main="Região Neotropical")
+```
+
+Para cortar as camadas climáticas, usaremos um objeto *extent* como referência e aplicaremos a função *crop()*.
+```{r}
+ext.neot<-extent(neot)
+envClim<-crop(envClim, ext.neot)
+plot(envClim[[1]], main="bio1 - Neotropical")
+```
+
+No entanto, queremos um *raster* com valores válidos apenas para região da Amazônia e todo o resto com valores "NA". Essa nova área será definida como área de *background* em nosso exemplo, ou seja, é a extensão que vamos considerar para calibrar, avaliar e projetar nosso modelo. Para isso, vamos converter o polígono da Amazônia em um *raster* usando a função *rasterize()*.
+```{r}
+amaz.r<- rasterize(amaz.sl, envClim[[1]])
+plot(amaz.r, main="Amazonia rasterizada")
+```
+
+Agora temos uma máscara pronta para nossa extensão de interesse (Amazônia), com as células de interesse com valores igual a 1, e o resto das células com valores "NA". Vamos multiplicar nosso pacote de variáveis climáticas pela máscara da Amazônia. 
+Repare que a extensão desse novo *raster* ainda está para a região Neotropical. Temos uma imagem grande, mas com muita informação descartável (milhares de células NA). Vamos reduzir a extensao da imagem cortando o raster usando a extensão do *shapefile* da Amazônia como referência.
+```{r}
+envClim<- envClim * amaz.r
+plot(envClim[[1]], main="bio1 - Amazônia")
+ext.amaz<-extent(amaz.sl)
+envClim<- crop(envClim, ext.amaz)
+plot(envClim[[1]], main="bio1 - Amazônia (imagem reduzida)")
+plot(amaz.sl, add=T)
+plot(Acham.spdf, add=T, pch=21, bg="white")
+map('world',add=T)
+```
+
+Agora vamos importar outras variáveis ambientais. Vamos importar uma variável topográfica (altitude), três variáveis de vegetação (% cobertura de árvores, altura da copa e produtividade primária líquida) e três variáveis edáficas (capaciade de troca catiônica -- CEC, % de areia e de argila no solo).
+Vamor primeiro importar a camada de altitude e manipular os dados para padronizar a extensão, resolução e sistema de referência de coordenadas. Na sequência, vamos utilizar um loop para automatizar o processo de importar e manipular as outras variáveis.
+
+```{r}
+alt<- raster("env_topo_alt.asc")
+## veja a resolução
+alt
+```
+
+Plote para ver a extensão da camada e cortar para a extensão de interesse.
+```{r}
+par(mfrow=c(1,2), mar=c(2,2,2,6))
+plot(alt, maxpixels=10000, main="altitude")
+alt<-crop(alt, ext.amaz)
+plot(alt, main="altitude - extensão Amazônia")
+```
+
+Todas as bases que vamos usar na modelagem devem estar na mesma resolução. Vamos usar a resolução dos raster climáticos do wordlClim que já importamos (~17km), portanto temos que redimensionar o raster de altitude de 1km para 17km usando a função resample(). A função resample disponibiliza dois métodos para redimensionamento de imagem: "bilinear" e "ngb" (nearest neighbor). Para redimensionar *raster* com valores numéricos contínuos, geralmente utilizamos a função bilinear. Para dados raster que possuem categorias (ex. mapa de land cover ou mapa de vegetação), a função "ngb" é mais apropriada.
+
+```{r}
+alt<-resample(alt, envClim[[1]], method="bilinear")
+# veja a nova resolução
+alt
+```
+
+Agora vamos selecionar apenas as células da região Amazônica, multiplicando o *raster* pela máscara da Amazônia já criada anteriormente. Depois vamos precisar criar uma máscara para a camada.
+
+```{r}
+par(mfrow=c(1,2),mar=c(2,2,2,4))
+alt<- alt * amaz.r
+plot(alt, main="Altitude - Amazônia")
+alt.mask<- alt
+# repare que os colchetes [ ] acessam os valores do raster
+alt.mask[alt >= minValue(alt)] <- 1
+plot(alt.mask, main="altitude - máscara")
+```
+
+Agora vamos fazer esse mesmo processo para todas as outras variáveis (importar, cortar, redimensionar, selecionar área de background, criar máscara). Para evitar de fazer uma por uma, vamos automatizar todos os passos com um loop.
+```{r}
+## Criando uma lista com os nomes dos arquivos a serem importados
+list.files<- list.files("/home/rafael/Documents/SDM_workshop/exercicios/", "env_")
+list.files
+## Vamos remover o arquivo da altitude que já processamos anteriormente
+list.files<- list.files[-4]
+
+## Criando um stack vazio
+env.all<-stack()
+
+## looping
+for(i in 1:length(list.files)){
+  ## cortando as camadas para a extensão de interesse
+  ri<- crop(raster(list.files[i]), ext.amaz)
+  ## redimensionando para a resolução desejada
+  ri<- resample(ri, envClim[[1]], method="bilinear")
+  ## selecionando as células válidas
+  ri<- ri*amaz.r
+  ## incluindo a camada no stack
+  env.all<- addLayer(env.all, ri)  
+}
+
+## Veja as informações do stack
+env.all
+```
+Agora que já temos um stack com as outras variáveis ambientais, vamos criar uma máscara para cada uma delas e depois unificar todas as máscaras em uma geral.
+```{r}
+## Máscara de variáveis edáficas
+soil.mask<-env.all[[1]]
+soil.mask[env.all[[1]] >= minValue(env.all[[1]])] <- 1
+
+## % cobertura florestal
+treecov.mask<-env.all[[4]]
+treecov.mask[env.all[[4]] >= minValue(env.all[[4]])] <- 1
+
+## produtividade primária
+npp.mask<-env.all[[5]]
+npp.mask[env.all[[5]] >= minValue(env.all[[5]])] <- 1
+
+## altura da copa
+canopy.mask<-env.all[[6]]
+canopy.mask[env.all[[6]] >= minValue(env.all[[6]])] <- 1
+
+## unificando as máscaras
+all.mask<- alt.mask*soil.mask*treecov.mask*npp.mask*canopy.mask
+## removendo as mascaras individuais para poupar espaço
+rm(alt.mask)
+rm(soil.mask)
+rm(treecov.mask)
+rm(npp.mask)
+rm(canopy.mask)
+```
+
+Agora que já temos a máscara geral, vamos agrupar todas as variáveis em um mesmo stack, aplicar a máscara e nomear as variáveis.
+```{r}
+## agrupando as variáveis
+ENV.all<- stack(alt, env.all, envClim)
+## aplicanod a máscara
+ENV.all<- ENV.all*all.mask
+## veja as informações -- agora temos um stack com 26 variáveis, todas na mesma extensão, resolução e sistema de coordenadas
+ENV.all
+```
+
+```{r}
+## Nomeando as variáveis
+names(ENV.all)<- c("alt", "CEC", "clay", "sand",
+                   "treeCover", "NPP", "canopy",
+                   "annual_mean_temp", "mean_day_temp_range", "isotermality", "temp_season",
+                   "max_temp_warm_M", "min_temp_cold_M", "temp_annual_range", "mean_temp_wet_Q",
+                   "mean_temp_dry_Q", "mean_temp_warm_Q", "mean_temp_cold_Q", "annual_prec",
+                   "prec_wet_M", "prec_dry_M", "prec_season", "prec_wet_Q",
+                   "prec_dry_Q", "prec_warm_Q", "prec_cold_Q")
+
+## Vamos garantir que todas estão na mesma projeção
+projection(ENV.all)<-"+proj=longlat +datum=WGS84"
+
+plot(ENV.all)
+```
+
+## 1.3 Explorando os dados
+
+A maioria dos modelos, especialmente os estatísticos de regressão, não lida bem com variáveis ambientais correlacionadas (multicolinearidade). A colinearidade impede que os parâmetros sejam estimados com confiança. Existem algumas formas de lidar com esse tipo de problema. Aqui vamos explorar duas das mais comuns: o cálculo dos coeficientes de correlação de Pearson entre todas as nossas camadas ambientais e o fator de inflação de variância (VIF).
+
+```{r}
+## Primeiro, vamos selecionar apenas os valores validos das variáveis, i.e., excluir os pixels sem informação (NAs)
+nna<-which(is.na(ENV.all[[1]][])== FALSE)
+## Agora vamos criar um data frame com os valores de todos os raster
+ENV.df<-as.data.frame(ENV.all[nna])
+## Matrix de correlação (coefs. Pearson)
+tabPearson<- cor(ENV.df)
+## Usando o comando abaixo, você pode exportar a tabela para explorar e vizualizar melhor em uma planilha de excel, por exemplo
+write.csv(tabPearson, file="matriz_correlacao.csv", row.names=T)
+```
+
+Analisando a matriz de correlação entre as variáveis, você pode avaliar quais são muito correlacionadas entre si, de acordo com algum limiar de corte, e tomar a decisão de quais deseja excluir, de acordo com hipóteses a priori sobre quais devem ser mais importantes para a espécie em questão.
+
+Para o exercício dessa apostila vamos remover variáveis correlacionadas de acordo com o fator de inlflação de variância (VIF). O VIF é baseado na correlação múltipla resultante da regressão de uma variável preditora em relação a todas as outras variáveis. Se uma variável tiver uma forte relação linear com pelo menos uma das outras variáveis, o coeficiente de correlação seria próximo de 1 e o VIF para essa variável seria grande. Um VIF maior que 10 é um sinal de que um modelo construído com o conjunto de variáveis pode ter problemas de colinearidade. Diferente do processo anterior, aqui a exclusão ocorre variável por variável e reavaliando a correlação entre elas após casa exclusão (stepwise).
+
+```{r}
+library(usdm)
+## Calculando o VIF para todas as variáveis
+vif(ENV.all) ## aqui você pode consultar o VIF de cada uma delas
+
+## Criando uma lista com variáveis que tenham correlação menor que |0.7| (th=.7)
+vif1<- vifcor(ENV.all, th=.7); vif1
+
+## Removendo as variáveis do stack
+ENV.all<- exclude(ENV.all, vif1) 
+## Conjunto final com as doze variáveis preditoras
+plot(ENV.all)
+```
+
+Vamos extrair os valores das condições ambientais apenas para os pontos de ocorrência da espécie, usando a função **extract()**.
+```{r}
+Acham.env<-as.data.frame(extract(ENV.all, Acham.spdf))
+head(Acham.env)
+```
+
+Agora vamos plotar os valores das condições ambientais (precipitação x temperatura) observadas na nossa área de background e sobreponha so valores das condições ambientais experimentadas pela espécies (valoresa ambientais dos pontos de ocorrência) .
+```{r}
+par(mfrow=c(1,1),mar=c(4,4,4,4))
+plot(ENV.df$max_temp_warm_M, ENV.df$prec_wet_M, cex=0.6, pch=19, col="gray60", 
+     xlab="temperatura máxima", ylab="precipitacao máxima")
+points(Acham.env$max_temp_warm_M, Acham.env$prec_wet_M, cex=1, pch=21, bg="black")
+```
+
+Como você definiria o nicho climático realizado desta espécie?
+
+
+# 2. Conhecendo o Maxent
+O Maxent é um algoritmo que desenvolve um modelo baseado em registros de presença e registros aleatórios que representam as condições ambientais dispoíveis (o que chamamos de registros de *background*). A idéia do modelo é contrastar a distribuição dos pontos de presença ao longo das variáveis ambientais, que chamaremos de uso do ambiente, com os pontos de *background* de uma extensão da paisagem em questão. 
+
+Carregue os seguintes pacotes:
+```{r}
+library(raster)
+library(sp)
+library(rgeos)
+library(rgdal)
+library(dismo)
+library(fields)
+library(rJava)
+library(ENMeval)
+library(knitr)
+```
+
+2.1: Uso, disponibilidade e preferência de habitat
+Neste exercício vamos contrastar as curvas de densidade de pontos de ocorrência ao longo do gradiente ambiental (curvas de uso) contra as curvas de disponibildiade do ambiente na paisagem, usando os dados de presença de *A. chamek* ao longo do gradiente de temperatura. Para os dados de background, vamos gerar 1000 pontos aleatórios na região de estudo.
+```{r}
+## Gerando os pontos 
+set.seed(1234)
+bg<-randomPoints(ENV.all[[1]], 1000)
+## Criando um objeto espacial destes pontos de background
+bg.sp<-SpatialPoints(bg, proj4string=CRS("+proj=longlat +datum=WGS84"))
+
+par(mfrow=c(1,1),mar=c(4,4,1,3))
+plot(ENV.all[[4]])
+plot(bg.sp, add=T, pch=19, cex=0.3)
+
+# extraia os valores da variável temperatura referentes a cada ponto de background e de ocorrência, separadamente.
+bg.env <- extract(ENV.all[[4]], bg.sp)
+occ.env<- extract(ENV.all[[4]], Acham.spdf)
+```
+
+Plote as curvas de uso e de disponibilidade. Lembre que os pontos de *background* serão utilizados para quantificar a disponibilidade de habitat para espécie, e **não representam ausências**. 
+```{r}
+# plot as curvas de distribuição de densidades
+# veja curva de disponibilidade (densidade de pontos de background ao longo do gradiente ambiental)
+par(mfrow=c(1,1),mar=c(5,4,4,4))
+plot(density(bg.env, cut=0),col="red", xlab=names(ENV.all[[4]]), main="uso versus disponibilidade")
+rug(bg.env, col="red")
+# veja curva de uso (densidade de pontos de ocorrencia ao longo do gradiente ambiental)
+lines(density(occ.env, cut=0), col="blue")
+rug(occ.env, side=3, col="blue")
+legend("topright", lwd=1, col=c("blue", "red"), bty="n",
+       legend=c("usado", "disponível"))
+```
+
+Veja que existe uma queda na densidade de pontos de ocorrência nos valores máximos de produtividade. Agora, vamos executar o Maxent para ver a condição de preferência da espécie pelo gradiente de produtividade primária.
+
+```{r}
+mx1<-maxent(stack(ENV.all[[4]]), p=Acham.spdf, a=bg, 
+            removeDuplicates=FALSE, 
+            args=c("-P","-J",'outputformat=raw',
+                   'noautofeature','nothreshold',
+                   'nohinge','noproduct','nodoclamp',
+                   "noaddsamplestobackground"))
+response(mx1, col="black", xlim=c(min(bg.env), max(bg.env)))
+```
+Porque não observamos a mesma queda nos valores de preferência?
+
+Agora vamos gerar o mesmo numero de pontos de occorencia da espécie, mas de maneira aleatoria, e plotar a curva de uso aleatória e a curva de disponibilidade de ambiente. Como você acha que será a forma da curva de preferência? 
+
+```{r}
+## Pontos aleatórios de ocorrência
+set.seed(1234)
+rand<-randomPoints(ENV.all[[4]], 93)
+bg.env <- extract(ENV.all[[4]], bg)
+## Pontos aleatórios usados 
+occRandom.env<-extract(ENV.all[[4]], rand)
+
+## Curvas de distribuição de densidades disponibilidade versos uso aleatório
+par(mfrow=c(1,1),mar=c(5,4,4,4))
+plot(density(bg.env, cut=0), col="red", xlab=names(ENV.all[[4]]),
+     main="uso aleatório / sobre disponibilidade")
+rug(bg.env, col="red")
+lines(density(occRandom.env, cut=0), col="blue")
+rug(occRandom.env, side=3, col="blue")
+```
+
+Veja que agora as curvas de uso e disponibilidade ficaram bem próximas uma da outra. Já tem uma ideia melhor sobre como será a forma da curva de preferência da espécies para esse gradiente ambiental? 
+Perceba que a distribuição de frequência dos dados de *background* ao longo das variáveis ambientais representam um modelo nulo, ou seja, ela descreve a curva de distribuição de densidade de pontos esperada pelo acaso. Os pontos de presença ocorrem em uma maior densidade próximo ao valor de 9000, pois essa é simplesmente a condição mais disponível na paisagem. Portanto não deve haver uma preferência ou seleção de uma faixa específica desse gradiente. 
+Vamos rodar o maxent da mesma forma como acima, mas substituindo os dados de presença de *A. chamek* pelo dados ocorrência gerados aleatórios, e plotar a curva de preferência para ver se você acertou.
+```{r}
+mx1<-maxent(stack(ENV.all[[4]]), p=rand, a=bg, 
+            removeDuplicates=FALSE, 
+            args=c("-P","-J",'outputformat=raw',
+                   'noautofeature','nothreshold',
+                   'nohinge','noproduct','nodoclamp',
+                   "noaddsamplestobackground"))
+response(mx1, col="black", xlim=c(min(bg.env), max(bg.env)))
+```
+
+Basicamente, é isso que o algorítmo do Maxent faz para construir as curvas de respostas (ou curvas de preferência) da espécie para cada uma das variáveis ambientais. A partir de agora vamos aprofundar um pouco mais no algoritmo para entender como podemos parametrizar, validar e gerar os resultados dos modelos.
+
+## 2.1 Iniciando o MAXENT
+Vamos então rodar o MaxEnt. Vamos gerar nossos pontos aleatórios de *background*,
+embora o programa tenha a função para gerar automaticamente, para garantir que todos vamos encontrar os mesmos resultados.
+```{r}
+set.seed(1234)
+bg<-randomPoints(ENV.all[[1]],5000)
+
+mx1<-maxent(ENV.all, p=Acham.spdf, a=bg, 
+            removeDuplicates=TRUE, 
+            args=c("-P","-J",'outputformat=raw',
+                   'noautofeature','nothreshold',
+                   'nohinge','noproduct',"noaddsamplestobackground"))
+## Execute o comando e veja os resultados em html
+mx1 
+## ou acesse eles pelo R com o comando "mx1@results""
+
+## Você pode consultar o help da função para ver o que significa os argumentos "p", "a" e "removeDuplicates". Vamos explorar os outro argumentos concatenados ("args") aqui na apostila, mas você ambém pode consultá-los na planilha fornecida junto com os arquivos do curso.
+```
+
+## 2.2 Output predictions: diferentes formas de output do programa
+
+O Maxent apresenta três formas de exibir os valores de adequabildiade ambiental: fomrato *raw*, *logistic* e *cumulative*. Vamos fazer os mapas de previsão usando as três formas. Repare na escala de variação das três formas. Por enquanto, o Maxent ainda não fornece a previsão para o output cumulativo aqui pelo R, portanto vamos usar uma função desenvolvida por Fernando Fiqueiredo para fazer essa previsão. Para esse exercício, vamos remover as estimativas de importância de variáves pelo Jackknife, removendo o argumento "-J" de args, para que o algorítmo rode mais rápido.
+```{r}
+
+## Formato Raw
+mx1<-maxent(ENV.all, p=Acham.spdf, a=bg, 
+            removeDuplicates=TRUE,
+            args=c("-P",'outputformat=raw', 'noautofeature', 
+                   'nothreshold', 'nohinge', 'noproduct',
+                   "noaddsamplestobackground"))
+## Abra o html e veja a escala das curvas de resposta
+mx1
+## Fazendo a previsão do output raw (vamos ver as previsões em seguida)
+praw<- predict(mx1, ENV.all, args=c('outputformat=raw'))
+
+
+## Formato Cumulative
+mx1<-maxent(ENV.all, p=Acham.spdf, a=bg, 
+            removeDuplicates=TRUE,
+            args=c("-P",'outputformat=cumulative', 'noautofeature', 
+                   'nothreshold', 'nohinge', 'noproduct',
+                   "noaddsamplestobackground"))
+## Abra o html e veja a escala das curvas de resposta
+mx1
+
+##########
+## Função para fazer a previsão do output cumulativo
+## Desenvolvida por Fernando Figueiredo
+outcumu<-function(rawpred){
+  c.df<-data.frame( which( is.na( getValues( rawpred))== FALSE), rawpred[which(is.na(getValues(rawpred))==FALSE)])
+  c.df2<-c.df[order(c.df[,2]),]
+  cumsoma<-cumsum(c.df2[,2])
+  rawpred2<-rawpred
+  rawpred2[c.df2[,1]]<-(cumsoma/max(cumsoma))*100
+  return(rawpred2)
+}
+## Fim
+###########
+
+## Fazendo a previsão do output cumulative
+praw<- predict(mx1, ENV.all, args=c('outputformat=raw'))
+pcum<- outcumu(praw)
+
+
+## Formato Logistic
+mx1<-maxent(ENV.all, p=Acham.spdf, a=bg, 
+            removeDuplicates=TRUE,
+            args=c("-P",'outputformat=logistic', 'noautofeature', 
+                   'nothreshold', 'nohinge', 'noproduct',
+                   "noaddsamplestobackground"))
+## Abra o html e veja a escala das curvas de resposta
+mx1
+## Fazendo a previsão do output logistic
+plog <- predict(mx1, ENV.all, args=c('outputformat=logistic'))
+
+
+## Gráficos
+par(mfrow=c(1,3), mar=c(3,3,3,3))
+## Raw
+plot(praw, main="raw", colNA="gray30")
+## Cumulative
+plot(pcum, main="cumulative", colNA="gray30")
+## Logistic
+plot(plog, main="logistic", colNA="gray30")
+```
+
+Veja o artigo de Merow et al. (2013) para interpretar os outputs do MAXENT e entender qual o output mais apropriado para seus objetivos.
+
+
+## 2.3 Registros de *background*: número de pontos e extensão
+Nesta parte da prática veremos como o número de pontos de *background* altera o desempenho (*gain*) do modelo e como a escolha da área de *background* altera a importância das variáveis e as previsões do modelo.
+Primeiro vamos usar um loop for para rodar o maxent 10 vezes para cada no. de pontos de background (1000, 2500, 5000, 7500, 10000, 12500 e 15000) de forma automatizada. **Essa operação deve demorar alguns instantes**.
+```{r}
+set.seed(1234)
+regtrain<-vector()
+nbg<-vector()
+for ( i in 1:10){
+  for (j in c(1000, 2500, 5000, 7500, 10000, 12500, 15000)){
+    bg<-randomPoints(ENV.all[[1]], j)
+    mx<-maxent(ENV.all, p=Acham.spdf, a=bg, removeDuplicates=TRUE,
+               args=c('outputformat=logistic', 'noautofeature', 
+                      'nothreshold', 'nohinge', 'noproduct',
+                      "noaddsamplestobackground"))
+    mx
+    regtrain<- append(regtrain, mx@results[2])
+    nbg<- append(nbg, j)
+  }
+}
+
+## Gráfico
+par(mfrow=c(1,1),mar=c(5,4,1,1))
+plot(nbg, regtrain, pch=21, cex=0.8, bg="gray60",
+     ylab="regularized training gain",
+     xlab="no. of background points")
+```
+
+Perceba que a variância do desempenho do modelo diminui a medida que aumenta o número de pontos de *background*. Além disso, a partir de ~10000 pontos a variância permanece relativamente constante. O ideal seria usar todas as células da área de calibração do modelo como pontos de background. No entanto, se a resolução espacial do nosso modelo for muito alta, teremos milhões ou quem sabe bilhões de pontos de background, o que tomaria muito tempo de processamento.
+
+Agora vamos ver como o tamanho da extensão de *background* (ou extensão de calibração) afeta a importância das variáveis e a previsão do modelo. Vamos calibrar e prever o modelo para a extensão da Amazônia e para uma extensão reduzida, apenas do registros de presença de *A. chamek*. Para tornar o processo mais rápido, vamos usar apenas 5000 pontos de *background*.
+```{r}
+## Modelo calibrado na extensão da Amazônia
+set.seed(1234)
+bg.am<-randomPoints(ENV.all[[1]], 5000)
+mx.am<-maxent(ENV.all, p=Acham.spdf, a=bg.am, 
+            removeDuplicates=TRUE,
+            args=c("-P",'outputformat=logistic', 'noautofeature', 
+                   'nothreshold', 'nohinge', 'noproduct',
+                   "noaddsamplestobackground"))
+## Abra o html para consultar a importância das variáveis
+mx.am
+## Fazendo a previsão logistica para o modelo na extensão Amazônica
+pamaz <- predict(mx.am, ENV.all, args=c('outputformat=logistic'))
+plot(pamaz)
+```
+
+Agora vamos calibrar e prever o modelo para uma região mais reduzida, por exemplo, a região de extensão dos pontos de ocorrência. Vamos usar os pontos de *background* criados acima que ocorrem nessa nova extensão para manter a mesma proporção de cobertura da área de *background*.
+```{r}
+ENV.redu<-crop(ENV.all, extent(Acham.spdf))
+# selecionar os pontos de bg que estao apenas dentro desta nova extensao
+bg.redu<-bg.am[which(is.na(extract(ENV.redu[[1]], bg.am))==F),]
+mx.redu<-maxent(ENV.redu, p=Acham.spdf, a=bg.redu, 
+              removeDuplicates=TRUE,
+              args=c("-P",'outputformat=logistic', 'noautofeature', 
+                     'nothreshold', 'nohinge', 'noproduct',
+                     "noaddsamplestobackground"))
+## Abra o html para consultar a importância das variáveis e compare com o modelo anterior
+mx.redu
+# previsão do modelo reduzido para área reduzida.
+predu<- predict(mx.redu, ENV.redu,args=c('outputformat=logistic'))
+```
+
+Consulte os arquivos html dos dois modelos e compare o AUC, as curvas de respostas e as importâncias relativas das variáveis. Quais foram as principais mudanças? Agora vamos comparar as previsões na área em comum aos dois modelos.
+```{r}
+par(mfrow=c(1,2),mar=c(5,3,1,4))
+plot(crop(pamaz, predu), main="extensão amazônica", col=tim.colors(64))
+plot(predu, main= "extensão reduzida", col=tim.colors(64))
+```
+
+Veja a distribuição dos registros de disponibilidade das diferentes extensões ao longo de um gradiente ambiental, por exemplo precipitação máxima.
+```{r}
+bg.env.amaz<-extract(ENV.all[[10]], bg.am)
+bg.env.redu<-extract(ENV.all[[10]], bg.redu)
+occ.env<-extract(ENV.all[[12]], Acham.spdf)
+
+# background da Amnazonia
+par(mfrow=c(1,1),mar=c(5,4,1,4))
+plot(density(bg.env.amaz, cut=0), ylim=c(0,.008), xlim=c(80,1500), col="red",
+     xlab=names(ENV.all[[10]]), main="")
+# background na area reduzida
+lines(density(bg.env.redu, cut=0), col="blue")
+# pontos de ocorrencia
+lines(density(occ.env, cut=0), col="black")
+```
+
+A distribuição dos pontos de usados de precipitação máxima (linha preta) se assemelha mais com qual distribuição da disponibilidade da precipitação máxima, com a extraída da Amazônia (vermelha) ou com a da área reduzida (azul)? Portanto, em qual extensão a precipitação máxima tem maior efeito? Vamos comparar as curvas de resposta rodando o Maxent apenas com essa variável.
+```{r}
+par(mfrow=c(1,2),mar=c(5,4,1,4))
+mx.NPPamaz<-maxent(stack(ENV.all[[10]]), p=Acham.spdf, a=bg.am,
+                   removeDuplicates=TRUE,
+                   args=c("-P",'outputformat=raw', 'noautofeature', 
+                     'nothreshold', 'nohinge', 'noproduct',
+                     "noaddsamplestobackground"))
+response(mx.NPPamaz)
+
+mx.NPPredu<-maxent(stack(ENV.all[[10]]), p=Acham.spdf, a=bg.redu,
+                   removeDuplicates=TRUE,
+                   args=c("-P",'outputformat=raw', 'noautofeature', 
+                       'nothreshold', 'nohinge', 'noproduct',
+                       "noaddsamplestobackground"))
+response(mx.NPPredu)
+```
+
+
+## 2.4 Curvas de resposta (*features*)
+
+O Maxent permite o uso de cinco tipos de curvas de resposta ordenadas das mais simples para as mais complexas: Linear, Quadratic, Product, Hinge e Threshold. Vamos construir alguns modelos com as diferentes curvas de resposta para enternder a diferença entre elas. Primeiro vamos criar uma *data.frame* vazio para salvar os AUCs e o número de parâmteros de cada modelo, dado pelos lambdas (*λ*). O  representam o peso de cada variável na previsão, algo similar aos coeficientes betas (*β*) em modelos de regressão. Quanto maior os valores absolutos, maior o peso da variável. Valores positivos indicam que a preferência aumenta conforme aumenta o valor da variável e valores negativos indicam que a preferência diminui conforme o valor da variável aumenta.
+```{r}
+resu.feat<-as.data.frame(array(NA,c(5,3)))
+colnames(resu.feat)<-c("AUC","nparam","features")
+```
+
+**Linear**
+```{r}
+set.seed(1234)
+bg<-randomPoints(ENV.all[[1]],2000)
+mxL<-maxent(ENV.all, p=Acham.spdf, a=bg, 
+           removeDuplicates=TRUE,
+           args=c("-P", 'outputformat=raw', 'noautofeature', 
+                  'noquadratic', 'nothreshold', 'nohinge', 
+                  'noproduct',"noaddsamplestobackground"))
+## Abra o html e veja as curvas de resposta e o AUC do modelo
+mxL
+## veja os valores de lambda
+mxL@lambdas
+## Salve o AUC e o número e parâmetros
+resu.feat[1,1]<-mxL@results[5]
+resu.feat[1,2]<-get.params(mxL)
+resu.feat[1,3]<-"L"
+```
+
+**Linear + Quadratic**
+```{r}
+mxLQ<-maxent(ENV.all, p=Acham.spdf, a=bg, 
+             removeDuplicates=TRUE,
+             args=c("-P", 'outputformat=raw', 'noautofeature', 
+                    'nothreshold', 'nohinge',
+                    'noproduct',"noaddsamplestobackground"))
+## Abra o html e veja as curvas de resposta e o AUC do modelo
+mxLQ
+## Veja os valores de lambda
+#mxLQ@lambdas
+## Salve o AUC e o número e parâmetros
+resu.feat[2,1]<-mxLQ@results[5]
+resu.feat[2,2]<-get.params(mxL)
+resu.feat[2,3]<-"LQ"
+```
+
+**Linear + Quadratic + Product**
+```{r}
+mxLQP<-maxent(ENV.all, p=Acham.spdf, a=bg,
+              removeDuplicates=TRUE,
+              args=c("-P", 'outputformat=raw', 'noautofeature',
+                     'nothreshold', 'nohinge',
+                     "noaddsamplestobackground"))
+## Abra o html e veja as curvas de resposta e o AUC do modelo
+mxLQP
+## veja os valores de lambda
+#mxLQP@lambdas
+## Salve o AUC e o número e parâmetros
+resu.feat[3,1]<-mxLQP@results[5]
+resu.feat[3,2]<-get.params(mxLQP)
+resu.feat[3,3]<-"LQP"
+```
+
+**Hinge**
+```{r}
+mxH<-maxent(ENV.all, p=Acham.spdf, a=bg, 
+            removeDuplicates=TRUE,
+            args=c("-P", 'outputformat=raw', 'noautofeature',
+                  'nothreshold', 'nolinear', 'noproduct', 'quadratic',
+                  "noaddsamplestobackground"))
+# veja as curvas de resposta e o AUC do modelo
+mxH
+# veja o numero de parâmetros (lambdas) estimados
+#mxH@lambdas
+# salve o AUC e o numero e parâmetros
+resu.feat[4,1]<-mxH@results[5]
+resu.feat[4,2]<-get.params(mxH)
+resu.feat[4,3]<-"H"
+```
+
+**Threshold**
+```{r}
+mxHTP<-maxent(ENV.all, p=Acham.spdf, a=bg,
+            removeDuplicates=TRUE,
+            args=c("-P", 'outputformat=raw', 'noautofeature', 
+                  'nolinear', 'noquadratic',
+                  "noaddsamplestobackground"))
+## Abra o html e veja as curvas de resposta e o AUC do modelo
+mxHTP
+## Veja o número de parâmetros (lambdas) estimados
+#mxHTP@lambdas
+## Salve o AUC e o numero e parâmetros
+resu.feat[5,1]<-mxHTP@results[5]
+resu.feat[5,2]<-get.params(mxHTP)
+resu.feat[5,3]<-"HTP"
+```
+
+Plote as previsões dos 5 modelos.
+```{r}
+par(mfrow=c(2,3),mar=c(5,4,1,4))
+prawL <- predict(mxL, ENV.all, args=c('outputformat=raw'))
+plot(outcumu(prawL), main="Linear", colNA="gray30")
+#plot(Acham.spdf, add=T, cex=0.7, pch=21, bg="gray60")
+
+praw <- predict(mxLQ, ENV.all, args=c('outputformat=raw'))
+plot(outcumu(praw), main="Linear+Quadratic", colNA="gray30")
+#plot(Acham.spdf, add=T, cex=0.7, pch=21, bg="gray60")
+
+praw <- predict(mxLQP, ENV.all, args=c('outputformat=raw'))
+plot(outcumu(praw), main="Linear+Quadratic+Product", colNA="gray30")
+#plot(Acham.spdf, add=T, cex=0.7, pch=21, bg="gray60")
+
+praw <- predict(mxH, ENV.all, args=c('outputformat=raw'))
+plot(outcumu(praw), main="Hinge", colNA="gray30")
+#plot(Acham.spdf, add=T, cex=0.7, pch=21, bg="gray60")
+
+praw <- predict(mxHTP, ENV.all, args=c('outputformat=raw'))
+plot(outcumu(praw), main="Hinge+Threshold+Product", colNA="gray30")
+#plot(Acham.spdf, add=T, cex=0.7, pch=21, bg="gray60")
+```
+
+Agora veja a tabela com os resultados e plote os AUCs dos modelos contra o número de parâmteros.
+```{r}
+resu.feat
+par(mfrow=c(1,1),mar=c(4,4,2,2))
+plot(resu.feat[,2],resu.feat[,1], type="n", ylab="AUC", xlab="n.param", 
+     ylim=c(.83,.93), xlim=c(10,70))
+text(resu.feat[,2],resu.feat[,1], labels=resu.feat[,3])
+```
+
+Os modelos com os maiores AUC nem sempre são, necessariamente, os mais parcimoniosos. Eles apresentam um bom desempenho mas necessitam de muito mais parâmetros, ou seja, são modelos mais complexos. Estes "bons" modelos podem ser muito bons em prever os próprios dados, mas se forem testados com pontos independentes (pontos não usados para calibrar os modelos), provavelmente terão um fraco desempenho (baixo AUC). É isso que chamamos de *overfitting*: a diferença entre o desempenho de um modelo ajustado apenas com dados de treinamento e um modelo ajustado e validado com dados de treino e teste. Perceba que neste exercício os valores de AUC foram estimados sobre os dados que foram calibrados o modelo. Uma das formas de avaliar o desempenho do modelo, controlando o *overfitting*, é através da partição os dados em dados de treinamento e teste, para validar o modelo. É isso que faremos a seguir.
+
+
+## 2.5 Partição dos dados em treinamento e teste
+
+Vamos repetir o exercício anterior, mas com os dados particionados em dados teste e treinamento. Para isso vamos usar uma técnica de validação cruzada (*cross-validation*) com cinco partições (*5 fold crossvalidation*). Para cada modelo-curva de resposta, iremos rodar cinco modelos, gerar cinco AUCs de treinamento e cinco AUCs de teste. Primeiro vamos criar uma tabela vazia para salvar os resultados.
+```{r}
+resu.feat2<-as.data.frame(array(NA,c(5,3)))
+colnames(resu.feat2)<-c("AUC.training","AUC.test","features")
+```
+
+**Linear**
+```{r}
+set.seed(1234)
+bg<-randomPoints(ENV.all[[1]],2000)
+mxL2<-maxent(ENV.all, p=Acham.spdf, a=bg,
+             removeDuplicates=TRUE,
+             args=c("-P", 'outputformat=raw', 'noautofeature', 
+                  'noquadratic', 'nothreshold', 'nohinge', 
+                  'noproduct',"noaddsamplestobackground",
+                  'replicatetype=crossvalidate',
+                  'replicates=5'))
+# salve a media do AUC treinamento e teste
+resu.feat2[1,1]<-mxL2@results[5,6]
+resu.feat2[1,2]<-mxL2@results[8,6]
+resu.feat2[1,3]<-"L"
+```
+
+**Linear + Quadratic**
+```{r}
+mxLQ2<-maxent(ENV.all, p=Acham.spdf, a=bg, 
+           removeDuplicates=TRUE,
+           args=c("-P", 'outputformat=raw', 'noautofeature',
+                  'nothreshold', 'nohinge', 'noproduct',
+                  'replicatetype=crossvalidate',
+                  'replicates=5'))
+# salve a media do AUC treinamento e teste
+resu.feat2[2,1]<-mxLQ2@results[5,6]
+resu.feat2[2,2]<-mxLQ2@results[8,6]
+resu.feat2[2,3]<-"LQ"
+```
+
+**Linear + Quadratic + Product**
+```{r}
+mxLQP2<-maxent(ENV.all, p=Acham.spdf, a=bg, 
+           removeDuplicates=TRUE,
+           args=c("-P", 'outputformat=raw', 'noautofeature',
+                  'nothreshold', 'nohinge',
+                  "noaddsamplestobackground",
+                  'replicatetype=crossvalidate',
+                  'replicates=5'))
+# salve a media do AUC treinamento e teste
+resu.feat2[3,1]<-mxLQP2@results[5,6]
+resu.feat2[3,2]<-mxLQP2@results[8,6]
+resu.feat2[3,3]<-"LQP"
+```
+
+**Hinge**
+```{r}
+mxH2<-maxent(ENV.all, p=Acham.spdf, a=bg, 
+           removeDuplicates=TRUE,
+           args=c("-P", 'outputformat=raw', 'noautofeature',
+                  'nothreshold', 'nolinear', 'noproduct', 'quadratic',
+                  "noaddsamplestobackground",
+                  'replicatetype=crossvalidate',
+                  'replicates=5'))
+# salve a media do AUC treinamento e teste
+resu.feat2[4,1]<-mxH2@results[5,6]
+resu.feat2[4,2]<-mxH2@results[8,6]
+resu.feat2[4,3]<-"H"
+```
+
+**Threshold**
+```{r}
+mxHTP2<-maxent(ENV.all, p=Acham.spdf, a=bg, 
+               removeDuplicates=TRUE,
+               args=c("-P", 'outputformat=raw', 'noautofeature', 
+                  'nolinear', 'noquadratic',
+                  "noaddsamplestobackground",
+                  'replicatetype=crossvalidate',
+                  'replicates=5'))
+# salve a media do AUC treinamento e teste
+resu.feat2[5,1]<-mxHTP2@results[5,6]
+resu.feat2[5,2]<-mxHTP2@results[8,6]
+resu.feat2[5,3]<-"HTP"
+```
+
+Veja a tabela com os resultados e plote os AUCs dos modelos (de treinamento e teste) contra o número de parâmteros.
+```{r}
+resu.feat2
+plot(resu.feat2[,1], type="n", ylim=c(.8,.92), ylab="AUC",xlab="modelo")
+# azul = dados de teste
+text(resu.feat2[,1], labels=resu.feat[,3], col="red")
+# vermelho = treinamento
+text(resu.feat2[,2], labels=resu.feat[,3], col="blue")
+```
+
+Você diria que os modelos tiveram o mesmo desempenho? Qual possui o melhor desempenho? Qual tem o maior *overfitting*?
+
+
+## 2.6 Regularização
+
+A regularização controla o *overfitting* de duas maneiras: (1) impedindo que o modelo não se ajuste muito precisamente aos dados observados; e (2) penalizando os modelos proporcionalmente a magnitude de seus coeficientes, aproximando a zero coeficientes com valores muito baixo e consequentemente eliminando muitas variáveis do modelo. 
+
+Vamos fazer seis modelos, usando apenas as curvas lineares e quadráticas, mas variando os valores de regularização (beta = 1, 2, 3, 4, 5 e 6). Repare que na tabela de argumentos do Maxent existe um parâmetro chamado *betamultiplier*. Esse parâmetro permite você multiplicar o beta *default*, ou seja, aumentar ou diminuir o efeito do beta regularizador. O *default* do programa é 1. Vamos utilizar a função automatizada avaixo para variar o valor do betamultiplier. Vamos salvar os valores de AUC (teste e treinamento usando cinco *fold cross-validation*), o número de parâmetros (lambdas) e ver os mapas de previsão. Abra uma janela do seu navegador para exibir os resultados.
+
+```{r}
+resu.beta<-as.data.frame(array(NA, c(7,4)))
+colnames(resu.beta)<-c("AUC.train","AUC.test","n.param","beta")
+lambda.list<-list()
+beta.arg<-make.args(RMvalues=c(0, 1, 2, 3, 4, 5, 6), fc=c("LQ"))
+
+par(mfrow=c(3,3), mar=c(4,4,2,4))
+pb <- txtProgressBar(min = 0, max = 6, style = 3)
+for (i in 1:7){  
+  mx2<-maxent(ENV.all, p=Acham.spdf, a=bg, 
+              removeDuplicates=TRUE,
+              args=c("-P", 'outputformat=raw', 'noautofeature',
+                     'nothreshold', 'nohinge', 'noproduct',
+                     'noaddsamplestobackground',
+                     as.character(beta.arg[[i]][1])))
+  # salva o no. de parametros
+  resu.beta[i,3]<-get.params(mx2)
+  # previsao espacial
+  praw <- predict(mx2, ENV.all, args=c('outputformat=logistic'))
+  plot(praw, main=as.character(beta.arg[[i]][1]),
+       col=tim.colors(64))
+  mx2<-maxent(ENV.all, p=Acham.spdf, a=bg, 
+              removeDuplicates=TRUE,
+              args=c("-P", 'outputformat=raw', 'noautofeature',
+                     'nothreshold', 'nohinge', 'noproduct',
+                     'noaddsamplestobackground',
+                     'replicatetype=crossvalidate',
+                     'replicates=5',
+                     as.character(beta.arg[[i]][1])))
+ 
+ resu.beta[i,1]<-mx2@results[5,6]
+ resu.beta[i,2]<-mx2@results[8,6]
+ resu.beta[i,4]<-beta.arg[[i]][1]
+ setTxtProgressBar(pb, i) 
+}
+```
+```{r}
+resu.beta$beta<- sub("betamultiplier=", "", resu.beta$beta)
+resu.beta
+```
+
+Agora plote os valores de AUC treinameto e teste contra os valores de betamultiplier.
+```{r}
+par(mfrow=c(1,1),mar=c(4,4,1,4))
+plot(resu.beta$beta,resu.beta$AUC.train, 
+     pch=19, col="blue", ylim=c(0.82,0.88),
+     xlab="betamultiplier", ylab="AUC")
+points(resu.beta$beta,resu.beta$AUC.test, 
+       pch=19, col="red")
+points(resu.beta$beta[2],resu.beta$AUC.train[2], 
+       pch=8, col="gray30", cex=2)
+points(resu.beta$beta[2],resu.beta$AUC.test[2], 
+       pch=8, col="gray30",cex=2)
+legend("topright", legend=c("AUC.train","AUC.test","default"),
+     pch=c(19,19,8), col=c("blue","red","gray30"), cex=0.8)
+```
+
+Qual o valor de beta do modelo com maior *overfitting*? Qual o valor de beta que apresentou o melhor desempenho (AUC test)? Usando o default do programa se obteve o modelo com melhor desempenho?
+
+
+## 2.7 Parametrização do Maxent usando o pacote **ENMeval**
+
+Você pode usar o pacote *ENMeval* (Muscarella et al., 2014) para automatizar a seleção dos parâmetros (regularização e curvas de resposta). Vamos avaliar os modelos baseado no maior valor de AUCtest, menor valor de AIC e seguindo o *default* do programa. Também vamos avaliar o *overfitting* destes três modelos usando a diferença entre o AUC do treinamento e o AUC do teste. Antes vamos remover os registros duplicados nas células porque a função do ENMeval está configurada para não remover registros duplicados.
+```{r}
+bck.na<- ENV.all[[1]]
+bck.na[]<- NA
+r<- rasterize(coordinates(Acham.spdf), bck.na, fun='count')
+Acham.pa<- rasterToPoints(r, fun=function(x){x>0}, spatial=T) 
+# veja o numero orginal de pontos e número de pontos únicos por cada célula do raster
+Acham.spdf
+## Agora veja se o número de registros diminuiu (ou seja, se tinham registros duplicados)
+Acham.pa
+```
+
+Agora, vamos aplicar a função *ENMevaluate* com as coordendas dos registros filtrados. Essa operação pode levar alguns minutos para ser concluída.
+```{r}
+set.seed(1234)
+bg<-randomPoints(ENV.all[[1]], 10000)
+mx3<-ENMevaluate(env=ENV.all, occ=coordinates(Acham.pa), bg.coords=bg,
+        RMvalues=seq(0.5, 4, 0.5),
+        fc=c("L", "LQ", "LQP", "H", "LQH"),
+        method="randomkfold", kfolds=5, parallel=T)
+mx3@results
+```
+
+Vamos agora fazer a classificação dos melhores modelos de acordo com o maior AUC teste, menor AIC e também salvar os resultados do modelo de acordo com a parametrização *default* do programa (LQH, beta=1). Veja também na tabela ordenada de AIC a posição do melhor modelo baseado no AUC teste, o número de parâmtros estimado pelo modelo e o valor de AIC.
+```{r}
+## Ordenando a tabela do melhor para o pior. Vamos salvar também a coluna de overfitting, que é a diferenca entre o AUC train e o AUC test (Mean.AUC.DIFF) e coluna do número de parâmetros
+ord1<- order(mx3@results$Mean.AUC, decreasing=T)
+best.AUCtest<- mx3@results[ord1, c(2,3,5,7)]; best.AUCtest
+
+ord2<- order(mx3@results$AICc)
+best.AIC<- mx3@results[ord2, c(2,3,13,16,7)]; best.AIC
+
+mod.def<-mx3@results[10, c(2,3,13,16,7)]; mod.def
+```
+
+Agora vamos fazer um histograma de todos os valores de *overfitting* (Mean.AUC.DIFF) e comparar os valores para os três modelos selecionados de acordo com melhor AUC, AIC e o *default* (LQH, beta=1).
+```{r}
+hist(mx3@results$Mean.AUC.DIFF, xlab="mean diff AUC",
+     col="gray80")
+abline(v=best.AIC[1,5], col="blue", lwd=2)
+abline(v=best.AUCtest[1,4], col="red", lwd=2)
+abline(v=mod.def[5], col="black", lwd=2)
+legend("topright", lty=1, col=c("blue", "red", "black"),
+       legend=c("AIC: LQP/beta=3", "AUC: LQH/beta=0.5", "default: LQH/beta=1"))
+```
+
+Qual modelo apresentou maior *overfitting*? Perceba que, para os modelos classificados pelo melhor AIC, a diferença entre o segundo modelo em relação ao melhor modelo foi maior que 2. Isso indica que temos forte evidência de que o modelo com menor AIC é o melhor modelo, ainda que o *overfitting* do segundo e teceiro melhor modelo tenham sido menores.
+
+Para finalizar, vamos fazer a projeção espacial dos três modelos. Como os modelos baseado no AUC teste e no default do programa envolvem partição dos dados (5 fold cross-validation) temos 5 modelos de treinamento. Faça a média dos 5 modelos para obter a projeção final de cada um destes modelos. Perceba que para o modelo classificado com o melhor AIC apenas um mapa de prrevisão é obtido, pois no AIC não se faz a partição dos dados em treinamento/teste.
+```{r}
+## best.AIC: LQP, beta=3
+mx.aic<- maxent(ENV.all, p=Acham.pa, a=bg,
+                removeDuplicates=TRUE,
+                args=c("-P", 'outputformat=logistic', 'noautofeature',
+                       'nothreshold', 'nohinge',
+                       'noaddsamplestobackground',
+                       'betamultiplier=3'))
+plog.aic<- predict(mx.aic, ENV.all, args=c('outputformat=logistic'))
+
+## best AUCtest : LQH, beta=0.5
+mx.auc<- maxent(ENV.all, p=Acham.pa, a=bg,
+                removeDuplicates=TRUE,
+                args=c("-P", 'outputformat=logistic', 'noautofeature',
+                       'nothreshold', 'noproduct',
+                       "noaddsamplestobackground",
+                       'replicatetype=crossvalidate',
+                       'replicates=5','betamultiplier=0.5'))
+plog <- predict(mx.auc, ENV.all, args=c('outputformat=logistic'))
+plogM.auc<-calc(plog, fun=mean)
+
+## Default: LQH, beta=1
+mx.def<- maxent(ENV.all, p=Acham.pa, a=bg,
+                removeDuplicates=TRUE,
+                args=c("-P", 'outputformat=logistic', 'noautofeature',
+                       'nothreshold', 'noproduct',
+                       "noaddsamplestobackground",
+                       'replicatetype=crossvalidate',
+                       'replicates=5','betamultiplier=1'))
+plog2 <- predict(mx.def, ENV.all, args=c('outputformat=logistic'))
+plogM.def<-calc(plog2, fun=mean)
+
+## Plot dos 3 mapas na mesma janela
+par(mfrow=c(1,3),mar=c(4,4,4,4))
+plot(plog.aic, main="bestAIC", colNA="gray30")
+#plot(Acham.pa, add=T, pch=21, cx=0.8, bg='gray30')
+plot(plogM.auc, main="bestAUC", colNA="gray30")
+#plot(Acham.pa, add=T, pch=21, cx=0.8, bg='gray30')
+plot(plogM.def, main="default", colNA="gray30")
+plot(Acham.pa, add=T, pch=21, cx=0.8, bg='gray30')
+```
+
+Em algumas ocasiões você pode precisar transformar a projeção logística contínua em uma projeção binária de presença/ausência da espécie. Para isso, você precisa escolher um limiar de corte (*threshold*), a partir do qual vocẽ vai assumir que as condições ambientais são boas o suficiente para você definir que a espécie está presente. Existem uma série de argumentos para escolher esse limiar. Para a projeção a seguir, vamos encontrar na curva ROC o ponto que possui máxima sensitividade e especificidade no teste do modelo. Esse valor é apresentado nos resultados do modelo. Você pode escolher outros limiares, fazer os mapas e compará-los.
+```{r}
+## Selecionando o limiar
+th<- mx.auc@results["Maximum.test.sensitivity.plus.specificity.Logistic.threshold",6]
+
+## Criando e plotando a projeção binária
+pbin<-plogM.auc
+pbin[plogM.auc[] >= th]<-1
+pbin[plogM.auc[] <  th]<-0
+plot(pbin, main="Mapa Binário")
+plot(Acham.spdf, add=T)
+
+## Caso queira exportar sua projeção para visualizá-la em algum programa de SIG, pode usar o comando abaixo
+#writeRaster(pbin, "A_chamek_projecao_binaria", format="GTiff", overwrite=T)
+```
+
+## 3. Comparando previsões do Maxent e Regessões logística.
+
+Neste exercício vamos demonstrar que existe uam relação íntima entre as previsões geradas pelo Maxent e regressão logística com dados de presença e *background* substituindo os zeros (ausência). Vamos usar os dados de presença de *A. chamek* que usamos até agora e apenas uma variável "altura da copa" como variável preditora. 
+Primeiro vamos preparar uma matriz com os dados de presença e *background* com os respectivos valores de altura da copa.
+```{r}
+## Pontos de background
+set.seed(1234)
+bg<-randomPoints(ENV.all[[1]], 10000)
+
+## Criando a matriz de dados para o GLM
+env.pres<- data.frame("obs"=Acham.pa$layer, "canopy"=extract(ENV.all[[5]], Acham.pa))
+env.bg<-data.frame("obs"=rep(0, nrow(bg)), "canopy"=extract(ENV.all[[5]], bg))
+pb.data<-rbind(env.pres, env.bg)
+head(pb.data)
+```
+
+Agora vamos ajustar o modelo de regressão logística (GLM com família binomial) usando dados presença e pontos aleatórios de background. Depois disso, vamos ver a estimativa dos parâmetros e fazer a previsão espacial.
+```{r}
+## Ajuste do modelo
+glm<- glm(obs ~ canopy, family=binomial('logit'), data=pb.data)
+## Veja os parâmetros estimados
+summary(glm)
+
+## Projeção
+## Extraindo os valores da camada para fazer a previsão
+nna<-which(is.na(ENV.all[[5]][])==F)
+nd<-as.data.frame(ENV.all[[5]][nna])
+colnames(nd)<- c("canopy")
+## Previsão
+pGLM<- predict(glm, newdata=nd, type="response")
+r.glm<-ENV.all[[1]]
+r.glm[nna]<-pGLM
+plot(r.glm, main="probabilidade de ocorrencia")
+```
+
+Agora vamos ajustar um modelo Maxent usando os mesmos dados acima (presenças e os 10000 pontos de *background*), ver a curva de resposta e fazer a previsão do output **raw**.
+```{r}
+mx.Acham<-maxent(stack(ENV.all[[5]]), p=Acham.pa, a=bg, 
+            removeDuplicates=T, 
+            args=c("-P",'outputformat=raw',
+                   'noautofeature','noquadratic','nothreshold','nohinge',
+                   "noaddsamplestobackground"))
+mx.Acham
+
+# previsão na escala "raw"
+r.Raw<- predict(mx.Acham, ENV.all, args=c('outputformat=raw'))
+plot(r.Raw)
+```
+
+Agora vamos ver a relação entre as previsões dos dois modelos. Vamos gerar 1000 pontos aleatórios para extrair os valores das previsões e avaliar a correlação entre elas.
+```{r}
+set.seed(1234)
+pt.cor<- randomPoints(ENV.all[[1]], 1000)
+par(mfrow=c(1,2),mar=c(4,4,4,4))
+## Regressao logística x Maxent output raw
+plot(extract(r.Raw, pt.cor), extract(r.glm, pt.cor), cex=0.5, pch=21, bg="gray30",
+     ylab="GLM-pb", xlab="Maxent-raw")
+```
+
+Perceba que a correlação entre a previsão do GLM com dados de presença-background (pb) e o outpupt raw do maxent são perfeitos -- o que muda é apenas a escala de variação dos valores previstos. Isso acontece porque o Maxent não tem uma estimativa do intercept, o que acontece com o GLM-pb. O output do maxent representa, portanto, um índice de adequabilidade que varia de 0 a 1, mas que não podem ser necessariamente interpretado como probabilidades de ocorrência verdadeiras. A interpretação correta é que valores mais altos indicam maior probabilidade de ocorrência, enquanto que valores baixos indicam o contrário. No entanto, na maioria das vezes estamos interessados em definir áreas binárias de presença-ausência (adequadas-não adequadas) aplicando um limiar de corte. Vamos usar um valor fixo de taxa de omissão como limiar (por exemplo 10%) e observar se existe ou não diferença entre os mapas previstos. No caso desse exercício, 
+10% de omissão representa 9.3 pontos de um total de 93 pontos de presença classificados em áres de ausência. Vamos assumir 9 pontos de omissão (valor inteiro). As áreas verdes indicam presença e áreas brancas indicam ausência.
+```{r}
+## Maxent-raw
+## Extraindo o limiar
+l.Rawe<-extract(r.Raw, Acham.pa)
+thRaw<- sort(l.Rawe)[9]
+## Projeção binária
+l.Raw<-r.Raw
+l.Raw[which(l.Raw[] > thRaw)]<-1
+l.Raw[which(l.Raw[] <= thRaw)]<-0
+
+# GLM-pb
+## Extraindo o limiar
+l.GLMe<-extract(r.glm, Acham.pa)
+thGLM<- sort(l.GLMe)[9]
+## Projeção binária
+l.glm<-r.glm
+l.glm[which(l.glm[] > thGLM)]<-1
+l.glm[which(l.glm[] <= thGLM)]<-0
+
+## Mapas
+par(mfrow=c(1,2),mar=c(4,4,2,2))
+plot(l.Raw, legend=F, colNA="gray40", main="Maxent-raw")
+plot(l.glm, legend=F, colNA="gray40",main="GLM-pb")
+```
+
